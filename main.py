@@ -1,15 +1,17 @@
-import os
 import io
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import HTMLResponse
-import google.generativeai as genai
-from PIL import Image
+import os
+
 from dotenv import load_dotenv
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import HTMLResponse
+from google import genai
+from PIL import Image
 
 load_dotenv()
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-model = genai.GenerativeModel('gemini-3.1-flash-lite')
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+
+client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 app = FastAPI()
 
@@ -33,7 +35,7 @@ async def strona_glowna():
     </head>
     <body>
         <div class="container">
-            <h1>🍳 AI Szef Kuchni</h1>
+            <h1>AI Szef Kuchni</h1>
             <p>Zrób zdjęcie swojej lodówki i sprawdź, co możemy ugotować!</p>
             <form action="/wygeneruj-przepis/" method="post" enctype="multipart/form-data">
                 <input type="file" name="plik" accept="image/*" required>
@@ -58,13 +60,16 @@ async def wygeneruj_przepis(plik: UploadFile = File(...)):
         2. Zaproponuj danie.
         3. Podaj prosty przepis krok po kroku.
 
-        WAŻNE: Zwróć całą odpowiedź używając znaczników HTML. 
-        Używaj nagłówków <h2>, list wypunktowanych <ul> <li> oraz paragrafów <p>. 
+        WAŻNE: Zwróć całą odpowiedź używając znaczników HTML.
+        Używaj nagłówków <h2>, list wypunktowanych <ul> <li> oraz paragrafów <p>.
         Nie używaj w ogóle znaczników Markdown.
         """
 
-        response = model.generate_content([prompt, zdjecie])
-        gotowy_przepis_html = response.text
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=[prompt, zdjecie],
+        )
+        gotowy_przepis_html = response.text or "<p>Nie udało się wygenerować przepisu.</p>"
 
         return f"""
         <!DOCTYPE html>
@@ -81,7 +86,7 @@ async def wygeneruj_przepis(plik: UploadFile = File(...)):
         </head>
         <body>
             <div class="container">
-                <a href="/" class="btn">⬅️ Wróć i spróbuj ponownie</a>
+                <a href="/" class="btn">Wróć i spróbuj ponownie</a>
                 <br>
                 {gotowy_przepis_html}
             </div>
