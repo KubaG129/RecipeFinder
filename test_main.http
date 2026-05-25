@@ -1,11 +1,18 @@
 # Test your FastAPI endpoints
 
 GET http://127.0.0.1:8000/
-Accept: application/json
+Accept: text/html
 
 ###
 
-GET http://127.0.0.1:8000/hello/User
+POST http://127.0.0.1:8000/chat
 Accept: application/json
+Content-Type: multipart/form-data; boundary=RecipeFinderBoundary
+
+--RecipeFinderBoundary
+Content-Disposition: form-data; name="wiadomosc"
+
+Mam jajka, pomidory i ser. Co mogę zrobić?
+--RecipeFinderBoundary--
 
 ###

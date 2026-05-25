@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RecipeFinder Chat</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <main class="app-shell">
+        <section class="chat-panel" aria-label="Czat z RecipeFinder">
+            <header class="chat-header">
+                <div>
+                    <p class="eyebrow">RecipeFinder</p>
+                    <h1>AI szef kuchni</h1>
+                </div>
+                <div class="status-pill">
+                    <span class="status-dot"></span>
+                    online
+                </div>
+            </header>
+
+            <div id="messages" class="messages" aria-live="polite">
+                <article class="message bot-message">
+                    <div class="avatar">RF</div>
+                    <div class="bubble">
+                        Cześć. Dodaj zdjęcie składników albo napisz, co masz pod ręką.
+                    </div>
+                </article>
+            </div>
+
+            <form id="chat-form" class="composer">
+                <input id="file-input" type="file" name="plik" accept="image/*" hidden>
+                <button id="attach-button" class="icon-button" type="button" title="Dodaj zdjęcie" aria-label="Dodaj zdjęcie">
+                    <svg aria-hidden="true" viewBox="0 0 24 24">
+                        <path d="M21.4 11.6 12 21a6 6 0 0 1-8.5-8.5l9.8-9.8a4 4 0 0 1 5.7 5.7l-9.8 9.8a2 2 0 0 1-2.8-2.8l9.4-9.4"/>
+                    </svg>
+                </button>
+
+                <div class="input-stack">
+                    <textarea
+                        id="message-input"
+                        name="wiadomosc"
+                        rows="1"
+                        placeholder="Napisz wiadomość..."
+                        autocomplete="off"
+                    ></textarea>
+                    <div id="file-preview" class="file-preview" hidden></div>
+                </div>
+
+                <button id="send-button" class="send-button" type="submit">
+                    Wyślij
+                </button>
+            </form>
+        </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

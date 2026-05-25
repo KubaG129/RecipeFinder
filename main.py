@@ -1,97 +1,170 @@
 import io
+import json
 import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from google import genai
-from PIL import Image
+from google.genai import types
+from PIL import Image, UnidentifiedImageError
 
 load_dotenv()
 
-MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+HISTORY_FILE = BASE_DIR / "historia.json"
+
+MODEL_NAME = "gemini-2.5-flash"
+SYSTEM_PROMPT = (
+    "Jesteś szefem kuchni. Gdy otrzymasz zdjęcie składników, nie podawaj od razu przepisu. "
+    "Najpierw przeanalizuj zdjęcie i zadaj użytkownikowi jedno pytanie o jego preferencje "
+    "(np. ile ma czasu, czy woli na ciepło/zimno). Dopiero gdy użytkownik odpowie, podaj zwięzły przepis."
+)
 
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-app = FastAPI()
+app = FastAPI(title="RecipeFinder Chat API")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-@app.get("/", response_class=HTMLResponse)
-async def strona_glowna():
-    return """
-    <!DOCTYPE html>
-    <html lang="pl">
-    <head>
-        <meta charset="UTF-8">
-        <title>AI Szef Kuchni</title>
-        <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; color: #333; text-align: center; padding: 50px; }
-            .container { background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 500px; margin: auto; }
-            h1 { color: #2c3e50; }
-            .btn { background-color: #e67e22; color: white; padding: 12px 25px; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; margin-top: 20px; transition: 0.3s; }
-            .btn:hover { background-color: #d35400; }
-            input[type=file] { margin-top: 20px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>AI Szef Kuchni</h1>
-            <p>Zrób zdjęcie swojej lodówki i sprawdź, co możemy ugotować!</p>
-            <form action="/wygeneruj-przepis/" method="post" enctype="multipart/form-data">
-                <input type="file" name="plik" accept="image/*" required>
-                <br>
-                <button type="submit" class="btn">Wygeneruj przepis</button>
-            </form>
-        </div>
-    </body>
-    </html>
-    """
+def load_history() -> list[dict[str, Any]]:
+    if not HISTORY_FILE.exists():
+        return []
 
-
-@app.post("/wygeneruj-przepis/", response_class=HTMLResponse)
-async def wygeneruj_przepis(plik: UploadFile = File(...)):
     try:
-        zawartosc = await plik.read()
-        zdjecie = Image.open(io.BytesIO(zawartosc))
+        data = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
 
-        prompt = """
-        Jesteś szefem kuchni. Na podstawie tego zdjęcia:
-        1. Wypisz składniki, które rozpoznajesz.
-        2. Zaproponuj danie.
-        3. Podaj prosty przepis krok po kroku.
+    return data if isinstance(data, list) else []
 
-        WAŻNE: Zwróć całą odpowiedź używając znaczników HTML.
-        Używaj nagłówków <h2>, list wypunktowanych <ul> <li> oraz paragrafów <p>.
-        Nie używaj w ogóle znaczników Markdown.
-        """
 
+def save_history(history: list[dict[str, Any]]) -> None:
+    HISTORY_FILE.write_text(
+        json.dumps(history, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def build_prompt(history: list[dict[str, Any]], message: str, has_image: bool) -> str:
+    serialized_history = json.dumps(history, ensure_ascii=False, indent=2)
+    image_note = "tak" if has_image else "nie"
+
+    return f"""
+Dotychczasowa historia rozmowy w aplikacji RecipeFinder:
+{serialized_history}
+
+Aktualna wiadomość użytkownika:
+{message or "[brak wiadomości tekstowej]"}
+
+Czy użytkownik dołączył zdjęcie w tym zapytaniu: {image_note}.
+
+Odpowiadaj po polsku, naturalnie i zwięźle. Zwróć wyłącznie treść wiadomości dla użytkownika,
+bez HTML oraz bez opakowywania odpowiedzi w JSON.
+""".strip()
+
+
+async def read_optional_image(file: UploadFile | None) -> tuple[Image.Image | None, str | None]:
+    if file is None or not file.filename:
+        return None, None
+
+    if file.content_type and not file.content_type.startswith("image/"):
+        raise ValueError("Załączony plik musi być obrazem.")
+
+    content = await file.read()
+    if not content:
+        return None, None
+
+    try:
+        image = Image.open(io.BytesIO(content))
+        image.load()
+    except UnidentifiedImageError as exc:
+        raise ValueError("Nie udało się odczytać obrazu.") from exc
+
+    return image, file.filename
+
+
+@app.get("/")
+async def index():
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.post("/chat")
+async def chat(
+    wiadomosc: str = Form(default=""),
+    plik: UploadFile | None = File(default=None),
+):
+    message = wiadomosc.strip()
+
+    try:
+        image, image_name = await read_optional_image(plik)
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "odpowiedz_bota": str(exc)},
+        )
+
+    if not message and image is None:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "odpowiedz_bota": "Napisz wiadomość albo dodaj zdjęcie składników.",
+            },
+        )
+
+    history = load_history()
+    user_entry = {
+        "rola": "uzytkownik",
+        "tresc": message,
+        "zalacznik": image_name,
+        "czas": now_iso(),
+    }
+
+    prompt = build_prompt(history, message, image is not None)
+    contents: list[Any] = [prompt]
+    if image is not None:
+        contents.append(image)
+
+    try:
         response = client.models.generate_content(
             model=MODEL_NAME,
-            contents=[prompt, zdjecie],
+            contents=contents,
+            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
         )
-        gotowy_przepis_html = response.text or "<p>Nie udało się wygenerować przepisu.</p>"
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "odpowiedz_bota": "Nie udało się teraz uzyskać odpowiedzi od modelu.",
+            },
+        )
 
-        return f"""
-        <!DOCTYPE html>
-        <html lang="pl">
-        <head>
-            <meta charset="UTF-8">
-            <title>Twój Przepis</title>
-            <style>
-                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; color: #333; padding: 30px; }}
-                .container {{ background: white; padding: 40px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 700px; margin: auto; line-height: 1.6; }}
-                .btn {{ background-color: #34495e; color: white; padding: 10px 20px; text-decoration: none; border-radius: 8px; display: inline-block; margin-bottom: 20px; }}
-                h2 {{ color: #e67e22; border-bottom: 2px solid #ecf0f1; padding-bottom: 10px; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <a href="/" class="btn">Wróć i spróbuj ponownie</a>
-                <br>
-                {gotowy_przepis_html}
-            </div>
-        </body>
-        </html>
-        """
-    except Exception as e:
-        return f"<h2>Wystąpił błąd:</h2><p>{str(e)}</p>"
+    bot_reply = (response.text or "").strip()
+    if not bot_reply:
+        bot_reply = "Nie udało mi się wygenerować odpowiedzi. Spróbuj doprecyzować wiadomość."
+
+    history.extend(
+        [
+            user_entry,
+            {
+                "rola": "bot",
+                "tresc": bot_reply,
+                "zalacznik": None,
+                "czas": now_iso(),
+            },
+        ]
+    )
+    save_history(history)
+
+    return {"status": "success", "odpowiedz_bota": bot_reply}
